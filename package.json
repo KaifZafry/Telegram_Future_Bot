@@ -1,0 +1,30 @@
+{
+  "name": "telegram-future-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram-to-Binance Futures automated trading platform monorepo.",
+  "workspaces": [
+    "apps/backend",
+    "apps/dashboard"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm --workspace apps/backend run dev\" \"npm --workspace apps/dashboard run dev\"",
+    "build": "npm --workspace apps/backend run build && npm --workspace apps/dashboard run build",
+    "start": "npm --workspace apps/backend start",
+    "typecheck": "npm --workspace apps/backend run typecheck && npm --workspace apps/dashboard run typecheck",
+    "lint": "npm --workspace apps/backend run lint",
+    "test": "npm --workspace apps/backend run test",
+    "setup": "npm --workspace apps/backend run setup --",
+    "telegram:login": "npm --workspace apps/backend run telegram:login --",
+    "telegram:chats": "npm --workspace apps/backend run telegram:chats --",
+    "signal:dry-run": "npm --workspace apps/backend run signal:dry-run --",
+    "dev:api": "npm --workspace apps/backend run dev",
+    "dev:dashboard": "npm --workspace apps/dashboard run dev"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+/*
+ * Dark trading theme. Every text/surface pair below clears WCAG 4.5:1.
+ * Profit/loss hues: marks use gain/loss, text uses the brighter *-text steps.
+ */
+@theme {
+  --color-bg: #0b0e11;
+  --color-surface: #12161c;
+  --color-surface-2: #1a1f27;
+  --color-surface-3: #222833;
+  --color-border: #262c36;
+  --color-border-strong: #343b47;
+  --color-text: #e8eaed;
+  --color-text-2: #a3aab5;
+  --color-muted: #8a919c;
+  --color-accent: #3987e5;
+  --color-accent-text: #5b9df0;
+  --color-gain: #199e70;
+  --color-gain-text: #22c08a;
+  --color-loss: #e66767;
+  --color-loss-text: #f07a7a;
+  --color-warn: #f0b429;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Prices, quantities and PnL never shift width as they update. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes flash-in {
+  from {
+    background-color: rgb(57 135 229 / 0.18);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.flash-in {
+  animation: flash-in 1.2s ease-out;
+}
