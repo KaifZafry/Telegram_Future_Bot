@@ -5,6 +5,12 @@ export const BINANCE_BASE_URLS: Record<BinanceEnvironment, string> = {
   [BinanceEnvironment.Live]: "https://fapi.binance.com"
 };
 
+/** User data streams live under /private since the 2026 WebSocket routing change. */
+export const BINANCE_USER_STREAM_URLS: Record<BinanceEnvironment, string> = {
+  [BinanceEnvironment.Testnet]: "wss://demo-fstream.binance.com/private/ws",
+  [BinanceEnvironment.Live]: "wss://fstream.binance.com/private/ws"
+};
+
 export interface BinanceCredentials {
   apiKey: string;
   apiSecret: string;

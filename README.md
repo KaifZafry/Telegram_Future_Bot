@@ -90,6 +90,52 @@ themselves. The dashboard and API must share a site (e.g. `localhost:3000` +
 `localhost:4000`, or `app.example.com` + `api.example.com`) for the login cookie to work;
 set `DASHBOARD_ORIGIN` (API) and `NEXT_PUBLIC_API_URL` (dashboard) accordingly.
 
+## Telegram control bot (optional)
+
+A private bot that sends you trade alerts and lets you control the bot from your phone.
+
+1. In Telegram, open **@BotFather** → `/newbot` → copy the token into
+   `TELEGRAM_CONTROL_BOT_TOKEN` in `apps/backend/.env`.
+2. Restart the backend, open your new bot and send `/start`. It replies with your
+   chat ID; put it in `TELEGRAM_CONTROL_CHAT_ID` and restart again.
+
+It only ever answers that chat. Commands: `/status`, `/positions` (each with a
+Close button), `/pnl`, `/pause`, `/resume`, `/panic` (close everything and pause;
+asks first). Every trade event (orders placed, TP hit, stop moved, closed with
+PnL, rejections, errors) arrives as a message.
+
+**Approve each trade**: turn on *Ask me on Telegram before each trade* in
+Settings → Automation. The bot sends the exact orders with Approve / Reject
+buttons; no answer within the timeout means no trade. After you approve, the
+trade is re-sized at the current price before orders are placed.
+
+## Follow-up messages
+
+With *Follow the group's follow-up messages* on (Settings → Automation, on by
+default), the bot acts on instructions the group posts after a signal:
+
+| Message | What the bot does |
+|---|---|
+| "Close RLC", "#RLC close now", "Exit all" (as a reply) | Cancels the trade's orders and closes at market |
+| "Move SL to entry", "SL to breakeven" | Moves the stop to the average entry |
+| "New SL 0.8100" | Moves the stop, **only if it reduces risk** |
+| "RLC signal cancelled", "Don't enter ETH" | Cancels unfilled entries (the whole trade if nothing filled) |
+| An edit of the original signal | New TPs are applied; a new SL only if tighter |
+| An incomplete post edited into a full signal | Traded as a new signal |
+
+Safety rules: a message is only treated as a follow-up if it is not a complete
+signal; it only affects trades from the **same group**; it must name the coin or
+be a Telegram reply to the signal (except "SL to entry" when that group has one
+open trade). Info posts like "TP1 hit ✅" are ignored. The Signals page shows
+what was done with every follow-up.
+
+## Real-time execution
+
+Each active Binance account keeps a user-data WebSocket open. When Binance
+reports a fill, the affected trade is re-synced within about a quarter second
+(TPs placed, stop moved to breakeven), instead of waiting for the 5-second
+check, which still runs as a safety net.
+
 ## Testnet first
 
 Start with a **testnet** account (keys from <https://demo.binance.com>, Futures

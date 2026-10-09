@@ -72,6 +72,8 @@ export const getSummary = async (_request: Request, response: Response): Promise
         liveTradingAllowed: env.BINANCE_ALLOW_LIVE
       },
       telegram: runtime.telegram?.getStatus() ?? { enabled: false, running: false, mode: "user" },
+      realtime: runtime.userStreams?.getStatus() ?? { accounts: 0, connected: 0 },
+      controlBot: runtime.controlBot?.getStatus() ?? { configured: false, running: false },
       accounts,
       today: {
         totalSignals: today?.totalSignals ?? 0,

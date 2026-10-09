@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { TelegramClient as GramJsClient } from "telegram";
 import { NewMessage, type NewMessageEvent } from "telegram/events/index.js";
+import { EditedMessage, type EditedMessageEvent } from "telegram/events/EditedMessage.js";
 import { LogLevel } from "telegram/extensions/Logger.js";
 import { StringSession } from "telegram/sessions/index.js";
 
@@ -26,6 +27,10 @@ export class GrammyTelegramClient implements TelegramClient {
     });
 
     this.bot.on("channel_post", async (context) => {
+      await onUpdate(context.update);
+    });
+
+    this.bot.on(["edited_message", "edited_channel_post"], async (context) => {
       await onUpdate(context.update);
     });
 
@@ -90,10 +95,33 @@ export class GramJsUserTelegramClient implements TelegramClient {
           date: message.date,
           chat: { id: chatId.toString() },
           text: message.message,
-          from: message.senderId ? { id: message.senderId.toString() } : undefined
+          from: message.senderId ? { id: message.senderId.toString() } : undefined,
+          reply_to_message: message.replyTo?.replyToMsgId
+            ? { message_id: message.replyTo.replyToMsgId }
+            : undefined
         }
       });
     }, new NewMessage({}));
+
+    this.client.addEventHandler((event: EditedMessageEvent) => {
+      const message = event.message;
+      const chatId = message.chatId;
+
+      if (!chatId) {
+        return;
+      }
+
+      void onUpdate({
+        update_id: message.id,
+        edited_message: {
+          message_id: message.id,
+          date: message.date,
+          edit_date: message.editDate ?? message.date,
+          chat: { id: chatId.toString() },
+          text: message.message
+        }
+      });
+    }, new EditedMessage({}));
   }
 
   public async listChats(): Promise<TelegramChatInfo[]> {

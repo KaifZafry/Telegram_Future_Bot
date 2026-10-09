@@ -48,6 +48,7 @@ export class FakeBinance {
   public positionAmt = 0;
   public entryPrice = 0;
   public hedgeMode = false;
+  public listenKeyRequests = 0;
   public readonly orders: FakeOrder[] = [];
   public readonly algoOrders: FakeAlgoOrder[] = [];
   public readonly trades: FakeTrade[] = [];
@@ -129,6 +130,10 @@ export class FakeBinance {
 
   private route(method: string, path: string, params: Record<string, string>): unknown {
     switch (`${method} ${path}`) {
+      case "POST /fapi/v1/listenKey":
+      case "PUT /fapi/v1/listenKey":
+        this.listenKeyRequests += 1;
+        return { listenKey: "fake-listen-key" };
       case "GET /fapi/v1/time":
         return { serverTime: Date.now() };
       case "GET /fapi/v1/exchangeInfo":

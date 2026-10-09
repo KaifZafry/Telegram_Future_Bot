@@ -2,6 +2,7 @@ import { GramJsUserTelegramClient, GrammyTelegramClient } from "./telegram.clien
 import { getTelegramConfig } from "./telegram.config.js";
 import {
   createTelegramUpdateHandler,
+  type SignalEditedHandler,
   type SignalStoredHandler
 } from "./telegram.handlers.js";
 import {
@@ -22,6 +23,7 @@ export interface TelegramModuleOptions {
   clientFactory?: TelegramClientFactory;
   service?: TelegramUpdateIngestionService;
   onSignalStored?: SignalStoredHandler;
+  onSignalEdited?: SignalEditedHandler;
   logger: TelegramLogger;
 }
 
@@ -52,6 +54,7 @@ export class TelegramModule {
   private readonly clientFactory: TelegramClientFactory;
   private readonly service: TelegramUpdateIngestionService;
   private readonly onSignalStored?: SignalStoredHandler;
+  private readonly onSignalEdited?: SignalEditedHandler;
   private readonly logger: TelegramLogger;
   private client?: TelegramClient;
   private running = false;
@@ -62,6 +65,7 @@ export class TelegramModule {
     this.logger = options.logger;
     this.service = options.service ?? createTelegramService(this.logger);
     this.onSignalStored = options.onSignalStored;
+    this.onSignalEdited = options.onSignalEdited;
   }
 
   public async initialize(): Promise<void> {
@@ -80,7 +84,7 @@ export class TelegramModule {
 
     this.client = this.clientFactory(this.config);
     await this.client.start(
-      createTelegramUpdateHandler(this.service, this.logger, this.onSignalStored)
+      createTelegramUpdateHandler(this.service, this.logger, this.onSignalStored, this.onSignalEdited)
     );
     this.running = true;
 

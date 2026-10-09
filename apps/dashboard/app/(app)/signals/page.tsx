@@ -151,9 +151,9 @@ const SignalsView = () => {
                     <td className="num px-3 py-3">{signal.symbol ? signal.takeProfits.length : ""}</td>
                     <td className="px-3 py-3">
                       <SignalStatusBadge signal={signal} />
-                      {signal.rejectionReason && (
-                        <span className="mt-1 block max-w-64 truncate text-xs text-muted" title={signal.rejectionReason}>
-                          {signal.rejectionReason}
+                      {(signal.followUp?.notes[0] ?? signal.rejectionReason) && (
+                        <span className="mt-1 block max-w-64 truncate text-xs text-muted" title={signal.followUp?.notes.join("; ") ?? signal.rejectionReason}>
+                          {signal.followUp?.notes[0] ?? signal.rejectionReason}
                         </span>
                       )}
                     </td>
@@ -208,7 +208,18 @@ const SignalDetailModal = ({ id, onClose }: { id: string | null; onClose: () => 
             </span>
           </div>
 
-          {(signal.rejectionReason ?? signal.parseError) && (
+          {signal.followUp && (
+            <div className="rounded-lg border border-accent/30 bg-accent/10 p-3 text-sm text-text-2">
+              <p className="mb-1 font-medium text-accent-text">What the bot did with this follow-up</p>
+              <ul className="list-inside list-disc space-y-0.5">
+                {signal.followUp.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!signal.followUp && (signal.rejectionReason ?? signal.parseError) && (
             <p className="rounded-lg border border-warn/30 bg-warn/10 p-3 text-sm text-warn">
               {signal.rejectionReason ?? signal.parseError?.message}
             </p>

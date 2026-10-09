@@ -5,6 +5,7 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Types } from "mongoose";
 
 import type { BinanceAccountClientRegistry as Registry } from "../modules/binance/binance.accounts.js";
+import type { TradeApprover } from "../modules/trading/trading.approval.js";
 
 import { FakeBinance } from "./support/fake-binance.js";
 
@@ -62,7 +63,11 @@ interface Harness {
 
 const createHarness = async (
   initialPrice: number,
-  options: { signalAgeSeconds?: number; settings?: Record<string, unknown> } = {}
+  options: {
+    signalAgeSeconds?: number;
+    settings?: Record<string, unknown>;
+    approver?: TradeApprover;
+  } = {}
 ): Promise<Harness> => {
   const exchange = new FakeBinance("RLCUSDT", initialPrice);
   exchangeCount += 1;
@@ -116,7 +121,8 @@ const createHarness = async (
       registry,
       maxSignalAgeSeconds: 120,
       allowLiveTrading: false,
-      getMarketClient: () => client
+      getMarketClient: () => client,
+      approver: options.approver
     }),
     signalId: signal._id.toString(),
     userId: user._id,
@@ -339,5 +345,80 @@ void describe("Trading lifecycle (fake Binance + MongoDB)", () => {
     assert.equal(signal?.status, SignalStatus.Rejected);
     assert.match(signal?.rejectionReason ?? "", /open RLCUSDT position/);
     assert.equal(await TradeModel.countDocuments(), 0);
+  });
+});
+
+void describe("Trade approval", () => {
+  before(async () => {
+    if (mongoose.connection.readyState !== mongoose.STATES.connected) {
+      mongo = await MongoMemoryServer.create();
+      await mongoose.connect(mongo.getUri());
+      await Promise.all(models.databaseModels.map((model) => model.syncIndexes()));
+    }
+  });
+
+  after(async () => {
+    await mongoose.disconnect();
+    await mongo.stop();
+  });
+
+  beforeEach(async () => {
+    await Promise.all(
+      Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({}))
+    );
+  });
+
+  const approver =(approved: boolean, available = true) => {
+    const requests: { symbol: string; lossAtStopUsdt: number }[] = [];
+    return {
+      requests,
+      isAvailable: () => available,
+      requestApproval: (request: { symbol: string; lossAtStopUsdt: number }) => {
+        requests.push(request);
+        return Promise.resolve(approved ? { approved: true } : { approved: false, reason: "Rejected by you" });
+      }
+    };
+  };
+
+  void it("places nothing when the owner rejects", async () => {
+    const stub = approver(false);
+    const { exchange, pipeline, signalId } = await createHarness(0.84, {
+      settings: { requireApproval: true },
+      approver: stub
+    });
+
+    await pipeline.process(signalId);
+
+    assert.equal(stub.requests.length, 1);
+    assert.equal(stub.requests[0]?.symbol, "RLCUSDT");
+    assert.ok((stub.requests[0]?.lossAtStopUsdt ?? 0) > 0);
+    assert.equal(exchange.orders.length, 0);
+    const signal = await SignalModel.findById(signalId).lean();
+    assert.equal(signal?.status, SignalStatus.Rejected);
+    assert.equal(signal?.rejectionReason, "Rejected by you");
+  });
+
+  void it("trades once the owner approves", async () => {
+    const { exchange, pipeline, signalId } = await createHarness(0.84, {
+      settings: { requireApproval: true },
+      approver: approver(true)
+    });
+
+    await pipeline.process(signalId);
+
+    assert.equal(exchange.openOrders().length, 3);
+    assert.equal((await SignalModel.findById(signalId).lean())?.status, SignalStatus.Executed);
+  });
+
+  void it("refuses to trade when approval is required but the bot is offline", async () => {
+    const { exchange, pipeline, signalId } = await createHarness(0.84, {
+      settings: { requireApproval: true },
+      approver: approver(true, false)
+    });
+
+    await pipeline.process(signalId);
+
+    assert.equal(exchange.orders.length, 0);
+    assert.match((await SignalModel.findById(signalId).lean())?.rejectionReason ?? "", /control bot is not connected/);
   });
 });

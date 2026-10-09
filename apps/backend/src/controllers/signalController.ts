@@ -32,7 +32,9 @@ export const listSignals = async (request: Request, response: Response): Promise
     userId,
     ...(query.before ? { _id: { $lt: new Types.ObjectId(query.before) } } : {}),
     ...(query.status ? { status: query.status } : {}),
-    ...(query.view === "signals" ? { symbol: { $exists: true } } : {})
+    ...(query.view === "signals"
+      ? { $or: [{ symbol: { $exists: true } }, { followUp: { $exists: true } }] }
+      : {})
   })
     .sort({ _id: -1 })
     .limit(query.limit)

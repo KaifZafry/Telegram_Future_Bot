@@ -4,3 +4,5 @@ export * from "./signal-parser.normalizer.js";
 export * from "./signal-parser.service.js";
 export * from "./signal-parser.types.js";
 export * from "./signal-parser.validators.js";
+export * from "./follow-up.parser.js";
+export * from "./follow-up.parser.js";

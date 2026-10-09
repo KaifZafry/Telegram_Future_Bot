@@ -22,7 +22,7 @@
     "dev:dashboard": "npm --workspace apps/dashboard run dev"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "devDependencies": {
     "concurrently": "^10.0.5"

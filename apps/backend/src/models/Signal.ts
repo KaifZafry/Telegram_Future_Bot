@@ -51,6 +51,13 @@ export interface Signal {
     message: string;
   };
   rejectionReason?: string;
+  replyToMessageId?: string;
+  editedAt?: Date;
+  followUp?: {
+    action: string;
+    executionIds: Types.ObjectId[];
+    notes: string[];
+  };
   receivedAt: Date;
   parsedAt?: Date;
   validatedAt?: Date;
@@ -178,6 +185,19 @@ const signalSchema = new Schema<Signal>(
       type: String,
       required: false,
       trim: true
+    },
+    replyToMessageId: {
+      type: String,
+      required: false
+    },
+    editedAt: {
+      type: Date,
+      required: false
+    },
+    followUp: {
+      action: { type: String, required: false },
+      executionIds: { type: [Schema.Types.ObjectId], ref: "TradeExecution", default: undefined },
+      notes: { type: [String], default: undefined }
     },
     receivedAt: {
       type: Date,

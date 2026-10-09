@@ -264,3 +264,40 @@ usual zero-position confirmation finalize it with `closeReason = MANUAL`. All wo
 on one execution is serialized (`runExclusive`), so a dashboard close never races
 the background sync loop. Open executions also record `positionQuantity`,
 `markPrice` and `unrealizedPnL` on each sync for live PnL.
+
+## Phase 6 Real-time, Control Bot, Follow-ups
+
+### Binance user data stream (`binance.user-stream.ts`)
+
+`UserStreamManager` keeps one user-data WebSocket per active account
+(`/private/ws/<listenKey>`, the path required since Binance's 2026 WebSocket
+routing change; keepalive every 30 min, reconnect with backoff, rotation before
+the 24h limit). Events are triggers only: any payload containing a bot client id
+(`tfb-<executionId>-…`) schedules `PositionManager.syncById`, and
+`ACCOUNT_UPDATE` schedules `syncAccount`. The sync still reads Binance state and
+the polling loop keeps running, so a missed or malformed event only delays work.
+
+### Control bot (`modules/control-bot`)
+
+A grammY bot with its own token, restricted to `TELEGRAM_CONTROL_CHAT_ID` by
+middleware. It subscribes to the event bus for alerts (debug chatter excluded),
+serves `/status`, `/positions`, `/pnl`, `/pause`, `/resume`, `/panic`, and
+implements `TradeApprover`. With `BotSettings.requireApproval`, the pipeline
+builds plans, asks for approval (timeout ⇒ reject), then rebuilds plans at
+fresh prices before executing. Approval required but bot offline ⇒ reject.
+
+### Follow-ups and edits (`trading.follow-up.ts`)
+
+Messages that fail full-signal parsing go to `parseFollowUp`
+(CLOSE / CANCEL / BREAKEVEN / MOVE_SL). Targets are open executions from the same
+`TelegramSource`, matched by reply (`Signal.replyToMessageId`), then by coin
+name; "SL to entry" may also apply to a sole open trade. Position actions run
+through `PositionManager` under the per-execution lock:
+`closeExecution`, `cancelEntries`, `moveStopLoss` (refuses any stop that widens
+risk; closes at market if price is already past it), `updateTakeProfits`. The
+outcome is stored on the message (`Signal.followUp`) and logged.
+
+Edited Telegram messages (`edited_message` / GramJS `EditedMessage`) update the
+stored text. If the message never produced a trade it is reprocessed (age
+measured from the edit); if it did, new take profits are applied and a new stop
+only when tighter.

@@ -48,6 +48,9 @@ const settingsSchema = z
     maxOpenTrades: z.number().int().min(1).max(100),
     maxDailyLoss: z.number().min(0),
     moveStopToBreakeven: z.boolean(),
+    requireApproval: z.boolean(),
+    followUpActions: z.boolean(),
+    approvalTimeoutSeconds: z.number().int().min(10).max(600),
     allowedSymbols: symbolList,
     blockedSymbols: symbolList
   })
@@ -164,6 +167,7 @@ export const createAccount = async (request: Request, response: Response): Promi
 
   const accountId = await saveBinanceAccount({ ...input, userId: getUserId(response) });
   runtime.registry?.invalidate(accountId.toString());
+  void runtime.userStreams?.refresh();
 
   response.status(201).json({
     success: true,
@@ -189,6 +193,7 @@ export const updateAccount = async (request: Request, response: Response): Promi
     throw new AppError("Account not found", 404, "NOT_FOUND");
   }
 
+  void runtime.userStreams?.refresh();
   response.json({ success: true, data: account });
 };
 
@@ -216,6 +221,7 @@ export const deleteAccount = async (request: Request, response: Response): Promi
 
   await BinanceAccountModel.deleteOne({ _id: accountId, userId: getUserId(response) });
   runtime.registry?.invalidate(accountId.toString());
+  void runtime.userStreams?.refresh();
   response.json({ success: true });
 };
 

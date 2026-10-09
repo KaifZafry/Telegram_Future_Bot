@@ -24,6 +24,9 @@ export interface BotSettings {
   defaultLeverage: number;
   entryOrderCount: number;
   entryTimeoutMinutes: number;
+  requireApproval: boolean;
+  followUpActions: boolean;
+  approvalTimeoutSeconds: number;
   moveStopToBreakeven: boolean;
   allowedSymbols: string[];
   blockedSymbols: string[];
@@ -102,6 +105,23 @@ const botSettingsSchema = new Schema<BotSettings>(
       default: 1440,
       required: true,
       validate: positiveNumberValidator
+    },
+    requireApproval: {
+      type: Boolean,
+      default: false,
+      required: true
+    },
+    followUpActions: {
+      type: Boolean,
+      default: true,
+      required: true
+    },
+    approvalTimeoutSeconds: {
+      type: Number,
+      default: 60,
+      required: true,
+      min: [10, "approvalTimeoutSeconds must be between 10 and 600"],
+      max: [600, "approvalTimeoutSeconds must be between 10 and 600"]
     },
     moveStopToBreakeven: {
       type: Boolean,

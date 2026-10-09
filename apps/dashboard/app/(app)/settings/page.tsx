@@ -20,7 +20,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
-import type { Account, Environment, Settings, Source, TelegramChat } from "@/lib/types";
+import type { Account, Environment, Settings, Source, Summary, TelegramChat } from "@/lib/types";
 
 export default function SettingsPage() {
   return (
@@ -28,6 +28,7 @@ export default function SettingsPage() {
       <PageHeader title="Settings" description="How the bot sizes and manages trades, and where it listens and trades" />
       <div className="space-y-6">
         <TradeSettingsCard />
+        <AutomationCard />
         <SourcesCard />
         <AccountsCard />
       </div>
@@ -216,6 +217,96 @@ const TradeSettingsCard = () => {
           {save.error && <span className="text-sm text-loss-text" role="alert">{save.error.message}</span>}
         </div>
       </form>
+    </Card>
+  );
+};
+
+// ---------------------------------------------------------------- automation
+
+const AutomationCard = () => {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ["settings"], queryFn: () => api.get<Settings>("/settings") });
+  const summary = useQuery({ queryKey: ["summary"], queryFn: () => api.get<Summary>("/dashboard/summary") });
+  const [timeout, setTimeoutValue] = useState("");
+  const save = useMutation({
+    mutationFn: (changes: Partial<Settings>) => api.put<Settings>("/settings", changes),
+    onSuccess: (saved) => queryClient.setQueryData(["settings"], saved)
+  });
+
+  useEffect(() => {
+    if (settings.data) setTimeoutValue(String(settings.data.approvalTimeoutSeconds));
+  }, [settings.data]);
+
+  if (!settings.data) {
+    return settings.error ? null : <Skeleton className="h-48 rounded-xl" />;
+  }
+
+  const controlBot = summary.data?.controlBot;
+  const timeoutNumber = Number(timeout);
+  const timeoutError =
+    !Number.isInteger(timeoutNumber) || timeoutNumber < 10 || timeoutNumber > 600 ? "Between 10 and 600 seconds" : undefined;
+
+  return (
+    <Card title="Automation" description="How much the bot does on its own">
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
+          <div>
+            <p className="text-sm font-medium">Ask me on Telegram before each trade</p>
+            <p className="text-xs text-muted">
+              Your control bot sends the exact orders with Approve / Reject buttons. No answer means no trade.
+            </p>
+            {!controlBot?.running && (
+              <p className="mt-1.5 text-xs text-warn">
+                Control bot is not connected — set TELEGRAM_CONTROL_BOT_TOKEN and TELEGRAM_CONTROL_CHAT_ID. While
+                it is offline, signals are rejected when this is on.
+              </p>
+            )}
+            {settings.data.requireApproval && (
+              <Field
+                label="Reject automatically after"
+                type="number"
+                inputMode="numeric"
+                min="10"
+                max="600"
+                suffix="sec"
+                className="mt-3 max-w-48"
+                value={timeout}
+                error={timeoutError}
+                onChange={(event) => setTimeoutValue(event.target.value)}
+                onBlur={() => {
+                  if (!timeoutError && timeoutNumber !== settings.data.approvalTimeoutSeconds) {
+                    save.mutate({ approvalTimeoutSeconds: timeoutNumber });
+                  }
+                }}
+              />
+            )}
+          </div>
+          <Toggle
+            label="Ask me on Telegram before each trade"
+            checked={settings.data.requireApproval}
+            disabled={save.isPending}
+            onChange={(requireApproval) => save.mutate({ requireApproval })}
+          />
+        </div>
+
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
+          <div>
+            <p className="text-sm font-medium">Follow the group&apos;s follow-up messages</p>
+            <p className="text-xs text-muted">
+              Acts on &ldquo;close RLC&rdquo;, &ldquo;move SL to entry&rdquo;, &ldquo;cancel&rdquo; and tighter new stops,
+              only for trades from the same group that the message names or replies to. A stop is never moved further away.
+            </p>
+          </div>
+          <Toggle
+            label="Follow the group's follow-up messages"
+            checked={settings.data.followUpActions}
+            disabled={save.isPending}
+            onChange={(followUpActions) => save.mutate({ followUpActions })}
+          />
+        </div>
+
+        {save.error && <p role="alert" className="text-sm text-loss-text">{save.error.message}</p>}
+      </div>
     </Card>
   );
 };

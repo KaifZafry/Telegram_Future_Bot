@@ -6,3 +6,4 @@ export * from "./binance.orders.js";
 export * from "./binance.planner.js";
 export * from "./binance.position-manager.js";
 export * from "./binance.types.js";
+export * from "./binance.user-stream.js";

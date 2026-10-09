@@ -11,7 +11,7 @@ import type {
   SymbolRules
 } from "./binance.types.js";
 
-type HttpMethod = "GET" | "POST" | "DELETE";
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 type QueryValue = string | number | boolean | undefined;
 
 export const BINANCE_ERROR_CODES = {
@@ -257,6 +257,21 @@ export class BinanceFuturesClient {
     return trades;
   }
 
+  /** Creates (or extends) the account's user data stream key; valid 60 minutes. */
+  public async createListenKey(): Promise<string> {
+    const response = await this.request<{ listenKey: string }>(
+      "POST",
+      "/fapi/v1/listenKey",
+      {},
+      "apiKey"
+    );
+    return response.listenKey;
+  }
+
+  public async keepAliveListenKey(): Promise<void> {
+    await this.request("PUT", "/fapi/v1/listenKey", {}, "apiKey");
+  }
+
   private async syncTime(): Promise<void> {
     const response = await this.request<{ serverTime: number }>(
       "GET",
@@ -272,7 +287,8 @@ export class BinanceFuturesClient {
     method: HttpMethod,
     path: string,
     params: Record<string, QueryValue> = {},
-    signed = true,
+    /** true = HMAC-signed; "apiKey" = API key header only (user data streams). */
+    signed: boolean | "apiKey" = true,
     isRetry = false
   ): Promise<T> {
     const query = new URLSearchParams();
@@ -285,10 +301,15 @@ export class BinanceFuturesClient {
 
     const headers: Record<string, string> = {};
 
-    if (signed) {
-      if (!this.credentials) {
-        throw new Error("Binance credentials are required for signed requests");
-      }
+    if (signed && !this.credentials) {
+      throw new Error("Binance credentials are required for signed requests");
+    }
+
+    if (signed === "apiKey" && this.credentials) {
+      headers["X-MBX-APIKEY"] = this.credentials.apiKey;
+    }
+
+    if (signed === true && this.credentials) {
 
       if (Date.now() - this.lastTimeSyncAt > TIME_SYNC_INTERVAL_MS) {
         await this.syncTime();
@@ -323,7 +344,7 @@ export class BinanceFuturesClient {
       );
 
       if (
-        signed &&
+        signed === true &&
         !isRetry &&
         error.code === BINANCE_ERROR_CODES.timestampOutsideRecvWindow
       ) {

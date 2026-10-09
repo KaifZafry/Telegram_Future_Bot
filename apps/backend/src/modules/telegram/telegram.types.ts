@@ -42,6 +42,8 @@ export interface TelegramMessage {
   sender_chat?: TelegramChat;
   text?: string;
   caption?: string;
+  edit_date?: number;
+  reply_to_message?: { message_id: number };
 }
 
 export interface TelegramUpdate {
@@ -58,6 +60,9 @@ export interface TelegramMessageCandidate {
   text: string;
   sender?: TelegramSenderInfo;
   messageDate: Date;
+  replyToMessageId?: string;
+  /** Set when this is an edit of an earlier message. */
+  editedAt?: Date;
 }
 
 export interface TelegramSourceRecord {
@@ -79,10 +84,16 @@ export interface RawSignalInput {
   rawText: string;
   telegramSender?: TelegramSenderInfo;
   receivedAt: Date;
+  replyToMessageId?: string;
 }
 
 export interface SignalRepository {
   createRawSignal(input: RawSignalInput): Promise<{ id: string }>;
+  findByMessage(
+    telegramSourceId: Types.ObjectId,
+    telegramMessageId: string
+  ): Promise<{ id: string; rawText: string } | null>;
+  updateEditedText(id: string, rawText: string, editedAt: Date): Promise<void>;
 }
 
 export interface TelegramLogger {
@@ -106,12 +117,14 @@ export interface TelegramClient {
 
 export type TelegramClientFactory = (config: TelegramConfig) => TelegramClient;
 
-export type TelegramIngestionStatus = "stored" | "ignored" | "duplicate";
+export type TelegramIngestionStatus = "stored" | "ignored" | "duplicate" | "edited";
 
 export interface TelegramIngestionResult {
   status: TelegramIngestionStatus;
   reason?: string;
   signalId?: string;
+  /** For edits: the text before the edit. */
+  previousText?: string;
 }
 
 export interface TelegramUpdateIngestionService {

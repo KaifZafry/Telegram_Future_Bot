@@ -5,10 +5,12 @@ import { env } from "./config/env.js";
 import { disconnectMongo, initializeDatabase } from "./config/mongodb.js";
 import {
   BinanceAccountClientRegistry,
-  PositionManager
+  PositionManager,
+  UserStreamManager
 } from "./modules/binance/index.js";
+import { createControlBot, type ControlBot } from "./modules/control-bot/index.js";
 import { createTelegramModule, type TelegramModule } from "./modules/telegram/index.js";
-import { SignalPipeline } from "./modules/trading/index.js";
+import { FollowUpHandler, SignalPipeline } from "./modules/trading/index.js";
 import { setTelegramStatusProvider } from "./services/healthService.js";
 import { runtime } from "./services/runtime.js";
 import { logger } from "./utils/logger.js";
@@ -16,6 +18,8 @@ import { logger } from "./utils/logger.js";
 let server: Server | undefined;
 let telegramModule: TelegramModule | undefined;
 let positionManager: PositionManager | undefined;
+let userStreams: UserStreamManager | undefined;
+let controlBot: ControlBot | undefined;
 let isShuttingDown = false;
 
 const shutdown = async (signal: NodeJS.Signals, exitCode = 0): Promise<void> => {
@@ -43,6 +47,10 @@ const shutdown = async (signal: NodeJS.Signals, exitCode = 0): Promise<void> => 
     await telegramModule.shutdown();
   }
 
+  await controlBot?.stop();
+
+  userStreams?.stop();
+
   if (positionManager) {
     await positionManager.stop();
   }
@@ -56,12 +64,6 @@ const start = async (): Promise<void> => {
   await initializeDatabase();
 
   const registry = new BinanceAccountClientRegistry();
-  const pipeline = new SignalPipeline({
-    logger,
-    registry,
-    maxSignalAgeSeconds: env.SIGNAL_MAX_AGE_SECONDS,
-    allowLiveTrading: env.BINANCE_ALLOW_LIVE
-  });
 
   positionManager = new PositionManager({
     registry,
@@ -72,9 +74,47 @@ const start = async (): Promise<void> => {
   runtime.positionManager = positionManager;
   runtime.registry = registry;
 
+  // Real-time order events from Binance trigger immediate syncs; polling remains the fallback.
+  userStreams = new UserStreamManager({ registry, target: positionManager, logger });
+  runtime.userStreams = userStreams;
+  void userStreams.start();
+
+  if (env.TELEGRAM_CONTROL_BOT_TOKEN) {
+    if (env.TELEGRAM_CONTROL_BOT_TOKEN === env.TELEGRAM_BOT_TOKEN) {
+      logger.error("TELEGRAM_CONTROL_BOT_TOKEN must differ from TELEGRAM_BOT_TOKEN; control bot disabled");
+    } else {
+      const streams = userStreams;
+      controlBot = createControlBot({
+        token: env.TELEGRAM_CONTROL_BOT_TOKEN,
+        ownerChatId: env.TELEGRAM_CONTROL_CHAT_ID,
+        logger,
+        trading: positionManager,
+        describeConnections: () => {
+          const listener = telegramModule?.getStatus();
+          const stream = streams.getStatus();
+          return [
+            `<b>Signal listener:</b> ${listener?.running ? "🟢 connected" : "🔴 offline"}`,
+            `<b>Binance stream:</b> ${stream.connected}/${stream.accounts} connected`
+          ];
+        }
+      });
+      runtime.controlBot = controlBot;
+    }
+  }
+
+  const pipeline = new SignalPipeline({
+    logger,
+    registry,
+    maxSignalAgeSeconds: env.SIGNAL_MAX_AGE_SECONDS,
+    allowLiveTrading: env.BINANCE_ALLOW_LIVE,
+    approver: controlBot,
+    followUps: new FollowUpHandler(positionManager)
+  });
+
   telegramModule = createTelegramModule({
     logger,
-    onSignalStored: (signalId) => pipeline.process(signalId)
+    onSignalStored: (signalId) => pipeline.process(signalId),
+    onSignalEdited: (signalId) => pipeline.processEdit(signalId)
   });
   setTelegramStatusProvider(() => telegramModule?.getStatus());
   runtime.telegram = telegramModule;
@@ -98,6 +138,10 @@ const start = async (): Promise<void> => {
   // their stop losses and take profits managed.
   await telegramModule.initialize().catch((error: unknown) => {
     logger.error({ error }, "Telegram listener failed to start; open trades are still managed");
+  });
+
+  await controlBot?.start().catch((error: unknown) => {
+    logger.error({ error }, "Telegram control bot failed to start");
   });
 };
 

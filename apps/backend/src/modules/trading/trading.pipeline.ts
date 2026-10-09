@@ -27,6 +27,8 @@ import {
 } from "../binance/binance.accounts.js";
 import type { BinanceFuturesClient } from "../binance/binance.client.js";
 import { executeOnAccount } from "../binance/binance.executor.js";
+import type { TradeApprovalDecision, TradeApprover } from "./trading.approval.js";
+import type { FollowUpHandler } from "./trading.follow-up.js";
 import { buildExecutionPlan, type ExecutionPlan } from "../binance/binance.planner.js";
 import {
   createSignalParserService,
@@ -48,6 +50,10 @@ export interface SignalPipelineOptions {
   parser?: SignalParserService;
   /** Market data source for sizing; defaults to Binance public endpoints. */
   getMarketClient?: (environment: BinanceEnvironment) => BinanceFuturesClient;
+  /** Used when the owner has turned on "approve each trade". */
+  approver?: TradeApprover;
+  /** Acts on follow-up messages ("close RLC", "move SL to entry"). */
+  followUps?: FollowUpHandler;
 }
 
 type AccountRecord = BinanceAccount & { _id: Types.ObjectId };
@@ -75,6 +81,8 @@ export class SignalPipeline {
   private readonly maxSignalAgeSeconds: number;
   private readonly allowLiveTrading: boolean;
   private readonly getMarketClient: (environment: BinanceEnvironment) => BinanceFuturesClient;
+  private readonly approver?: TradeApprover;
+  private readonly followUps?: FollowUpHandler;
 
   public constructor(options: SignalPipelineOptions) {
     this.logger = options.logger;
@@ -83,12 +91,58 @@ export class SignalPipeline {
     this.maxSignalAgeSeconds = options.maxSignalAgeSeconds;
     this.allowLiveTrading = options.allowLiveTrading;
     this.getMarketClient = options.getMarketClient ?? getPublicClient;
+    this.approver = options.approver;
+    this.followUps = options.followUps;
   }
 
-  public async process(signalId: string): Promise<void> {
-    const parsed = await this.parser.parseAndUpdateSignal(signalId);
+  /**
+   * The group edited a message. Never-traded messages are processed again
+   * (an incomplete post may now be a full signal); for a signal already being
+   * traded, new take profits are applied and a new stop only if it is tighter.
+   */
+  public async processEdit(signalId: string): Promise<void> {
+    const signal = await SignalModel.findById(signalId).lean();
+
+    if (!signal || signal.followUp) {
+      return;
+    }
+
+    if (!(await TradeExecutionModel.exists({ signalId: signal._id }))) {
+      await this.process(signalId, { reparse: true });
+      return;
+    }
+
+    const parsed = this.parser.parseSignalText(signal.rawText);
+
+    if (!parsed.success || !this.followUps) {
+      return;
+    }
+
+    const notes = await this.followUps.applyEditedLevels(signal._id, {
+      stopLoss: parsed.data.stopLoss,
+      takeProfits: parsed.data.takeProfits
+    });
+
+    await writeSystemLog({
+      level: SystemLogLevel.Info,
+      category: SystemLogCategory.Signal,
+      userId: signal.userId,
+      message: `${parsed.data.symbol} signal edited by the group: ${notes.length > 0 ? notes.join("; ") : "no change to apply"}`,
+      metadata: { signalId }
+    });
+  }
+
+  public async process(signalId: string, options: { reparse?: boolean } = {}): Promise<void> {
+    const parsed = await this.parser.parseAndUpdateSignal(signalId, { force: options.reparse });
 
     if (!parsed.parsed || !parsed.result?.success) {
+      const message = await SignalModel.findById(signalId).lean();
+
+      // Not a full signal: it may be an instruction about an open trade.
+      if (message && this.followUps && (await this.followUps.handle(message))) {
+        return;
+      }
+
       const failure = parsed.result && !parsed.result.success ? parsed.result : undefined;
       await writeSystemLog({
         level: SystemLogLevel.Debug,
@@ -109,7 +163,8 @@ export class SignalPipeline {
     const reject = (reason: string): Promise<void> =>
       this.rejectSignal(signal._id, signal.userId, data, reason);
 
-    const ageSeconds = (Date.now() - new Date(signal.receivedAt).getTime()) / 1000;
+    // An edited message counts from its edit, so a quick correction can still trade.
+    const ageSeconds = (Date.now() - new Date(signal.editedAt ?? signal.receivedAt).getTime()) / 1000;
     if (ageSeconds > this.maxSignalAgeSeconds) {
       return reject(`Signal is ${Math.round(ageSeconds)}s old (max ${this.maxSignalAgeSeconds}s)`);
     }
@@ -130,18 +185,28 @@ export class SignalPipeline {
     }
 
     const leverage = Math.min(data.leverage ?? settings.defaultLeverage, settings.maxLeverage);
-    const plans = new Map<BinanceEnvironment, ExecutionPlan>();
+    let planning = await this.buildPlans(accounts, data, settings, leverage);
 
-    for (const environment of new Set(accounts.map((account) => account.environment))) {
-      const planResult = await this.buildPlan(environment, data, settings, leverage);
-
-      if (!planResult.ok) {
-        return reject(planResult.reason);
-      }
-
-      plans.set(environment, planResult.plan);
+    if (!planning.ok) {
+      return reject(planning.reason);
     }
 
+    if (settings.requireApproval) {
+      const decision = await this.requestApproval(signal._id, data, accounts, planning.plans, settings);
+
+      if (!decision.approved) {
+        return reject(decision.reason ?? "Not approved");
+      }
+
+      // Prices moved while waiting; size and route the trade again before placing it.
+      planning = await this.buildPlans(accounts, data, settings, leverage);
+
+      if (!planning.ok) {
+        return reject(`Approved, but no longer tradable: ${planning.reason}`);
+      }
+    }
+
+    const plans = planning.plans;
     const firstPlan = [...plans.values()][0] as ExecutionPlan;
     const trade = await TradeModel.create({
       userId: signal.userId,
@@ -254,6 +319,56 @@ export class SignalPipeline {
     }
 
     await this.rejectSignal(signal._id, signal.userId, data, reason);
+  }
+
+  private async buildPlans(
+    accounts: AccountRecord[],
+    signal: NormalizedSignal,
+    settings: BotSettings,
+    leverage: number
+  ): Promise<{ ok: true; plans: Map<BinanceEnvironment, ExecutionPlan> } | { ok: false; reason: string }> {
+    const plans = new Map<BinanceEnvironment, ExecutionPlan>();
+
+    for (const environment of new Set(accounts.map((account) => account.environment))) {
+      const planResult = await this.buildPlan(environment, signal, settings, leverage);
+
+      if (!planResult.ok) {
+        return planResult;
+      }
+
+      plans.set(environment, planResult.plan);
+    }
+
+    return { ok: true, plans };
+  }
+
+  private async requestApproval(
+    signalId: Types.ObjectId,
+    signal: NormalizedSignal,
+    accounts: AccountRecord[],
+    plans: Map<BinanceEnvironment, ExecutionPlan>,
+    settings: BotSettings
+  ): Promise<TradeApprovalDecision> {
+    if (!this.approver?.isAvailable()) {
+      return {
+        approved: false,
+        reason: "Trade approval is on, but the Telegram control bot is not connected"
+      };
+    }
+
+    const plan = [...plans.values()][0] as ExecutionPlan;
+    await SignalModel.updateOne({ _id: signalId }, { $set: { status: SignalStatus.Validated } });
+
+    return this.approver.requestApproval({
+      signalId: signalId.toString(),
+      symbol: signal.symbol,
+      side: signal.side,
+      marginType: signal.marginType ?? MarginType.Cross,
+      plan,
+      lossAtStopUsdt: Math.abs(plan.averageEntryPrice - Number(plan.stopLoss)) * plan.totalQuantity,
+      accountNames: accounts.map((account) => account.name),
+      timeoutSeconds: settings.approvalTimeoutSeconds
+    });
   }
 
   private async checkRiskRules(

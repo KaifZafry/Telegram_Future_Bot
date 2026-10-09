@@ -38,6 +38,11 @@ export interface PositionManagerLogger {
   error(data: Record<string, unknown>, message: string): void;
 }
 
+export interface FollowUpResult {
+  applied: boolean;
+  note: string;
+}
+
 export interface PositionManagerOptions {
   registry: BinanceAccountClientRegistry;
   logger: PositionManagerLogger;
@@ -182,6 +187,32 @@ export class PositionManager {
     });
   }
 
+  /** Reconciles one trade right away (e.g. when the exchange reports an order change). */
+  public async syncById(executionId: string): Promise<void> {
+    await this.runExclusive(executionId, async () => {
+      const execution = await TradeExecutionModel.findById(executionId);
+
+      if (execution && MANAGED_STATUSES.includes(execution.status)) {
+        await this.syncExecution(execution);
+      }
+    });
+    eventBus.publish({ type: "positions" });
+  }
+
+  /** Reconciles every open trade on one account (e.g. after a position change). */
+  public async syncAccount(binanceAccountId: string): Promise<void> {
+    const executions = await TradeExecutionModel.find({
+      binanceAccountId,
+      status: { $in: MANAGED_STATUSES }
+    })
+      .select("_id")
+      .lean();
+
+    for (const execution of executions) {
+      await this.syncById(execution._id.toString());
+    }
+  }
+
   public async closeAll(): Promise<number> {
     const executions = await TradeExecutionModel.find({ status: { $in: MANAGED_STATUSES } })
       .select("_id")
@@ -207,7 +238,124 @@ export class PositionManager {
     });
   }
 
-  public async syncExecution(execution: TradeExecutionDocument): Promise<void> {
+  /**
+   * Follow-up "cancel": drops the entries that have not filled. A trade with no
+   * fills is cancelled entirely; an open position keeps its SL and TPs.
+   */
+  public cancelEntries(executionId: string): Promise<FollowUpResult> {
+    return this.runManaged(executionId, async (context) => {
+      await this.cancelOrders(context, ordersWithRole(context.orders, OrderRole.Entry));
+
+      if (!(await this.hasFilledEntries(context))) {
+        await this.finalizeCancelled(context, "Cancelled by the signal group");
+        return { applied: true, note: "trade cancelled before any entry filled" };
+      }
+
+      context.execution.entryExpiresAt = new Date();
+      await context.execution.save();
+      return { applied: true, note: "unfilled entries cancelled; open position kept" };
+    });
+  }
+
+  /**
+   * Moves the stop loss of an open position to its average entry, or to a
+   * given price. Never widens risk: a price further from the position than the
+   * current stop is refused.
+   */
+  public moveStopLoss(executionId: string, target: "breakeven" | number): Promise<FollowUpResult> {
+    return this.runManaged(executionId, async (context) => {
+      const { execution, client, rules } = context;
+      const position = await client.getPosition(execution.symbol);
+      const quantity = Math.abs(Number(position?.positionAmt ?? 0));
+
+      if (isZeroQuantity(quantity, rules.stepSize)) {
+        return { applied: false, note: "no entry has filled yet" };
+      }
+
+      const isLong = execution.side === SignalSide.Long;
+      const requested = target === "breakeven" ? Number(position?.entryPrice) : target;
+      const stopPrice = Number(roundToStep(requested, rules.tickSize));
+      const markPrice = Number(position?.markPrice) || (await client.getMarkPrice(execution.symbol));
+
+      if (!(stopPrice > 0)) {
+        return { applied: false, note: "invalid stop price" };
+      }
+
+      if (isLong ? stopPrice <= execution.currentStopLoss : stopPrice >= execution.currentStopLoss) {
+        return { applied: false, note: `new stop ${stopPrice} would not reduce risk (current ${execution.currentStopLoss})` };
+      }
+
+      if (isLong ? stopPrice >= markPrice : stopPrice <= markPrice) {
+        await this.cancelOrders(context, context.orders.filter((order) => order.role !== OrderRole.Close));
+        await this.closeAtMarket(context, quantity, `price is already past the requested stop ${stopPrice}`);
+        await execution.save();
+        return { applied: true, note: "price was already past the new stop, so the position was closed" };
+      }
+
+      await this.cancelOrders(context, ordersWithRole(context.orders, OrderRole.StopLoss));
+      const placed = await this.placeStopLoss(context, stopPrice, quantity);
+
+      if (target === "breakeven" && placed) {
+        execution.slMovedToBreakeven = true;
+      }
+
+      await execution.save();
+      return placed
+        ? { applied: true, note: `stop loss moved to ${stopPrice}` }
+        : { applied: false, note: "Binance rejected the new stop; the old stop was re-placed on the next sync" };
+    });
+  }
+
+  /** Replaces the take-profit targets (e.g. the provider edited them); open TPs are re-placed. */
+  public updateTakeProfits(
+    executionId: string,
+    takeProfits: { price: number; allocationPercentage: number }[]
+  ): Promise<FollowUpResult> {
+    return this.runManaged(executionId, async (context) => {
+      const { execution } = context;
+      await this.cancelOrders(context, ordersWithRole(context.orders, OrderRole.TakeProfit));
+      execution.set("takeProfits", takeProfits);
+      // Forces the next sync to size and place TPs for the new targets.
+      execution.tpPlacedForQuantity = 0;
+      await execution.save();
+      await this.syncExecution(execution);
+      return { applied: true, note: "take profits updated" };
+    });
+  }
+
+  private runManaged(
+    executionId: string,
+    action: (context: SyncContext) => Promise<FollowUpResult>
+  ): Promise<FollowUpResult> {
+    return this.runExclusive(executionId, async () => {
+      const execution = await TradeExecutionModel.findById(executionId);
+
+      if (!execution || !MANAGED_STATUSES.includes(execution.status)) {
+        return { applied: false, note: "trade is not open" };
+      }
+
+      const context = await this.buildContext(execution);
+
+      for (const order of context.orders.filter(isActiveOrder)) {
+        await this.refreshOrder(context, order);
+      }
+
+      const result = await action(context);
+      eventBus.publish({ type: "positions" });
+      return result;
+    });
+  }
+
+  private async hasFilledEntries(context: SyncContext): Promise<boolean> {
+    const filled = sumFilled(ordersWithRole(context.orders, OrderRole.Entry));
+    const position = await context.client.getPosition(context.execution.symbol);
+    return (
+      !isZeroQuantity(filled, context.rules.stepSize) ||
+      !isZeroQuantity(Math.abs(Number(position?.positionAmt ?? 0)), context.rules.stepSize)
+    );
+  }
+
+  private async buildContext(execution: TradeExecutionDocument): Promise<SyncContext> {
     const client = await this.registry.get(execution.binanceAccountId.toString());
     const rules = await client.getSymbolRules(execution.symbol);
 
@@ -218,7 +366,8 @@ export class PositionManager {
     const orders = await OrderModel.find({ tradeExecutionId: execution._id }).sort({
       createdAt: 1
     });
-    const context: SyncContext = {
+
+    return {
       execution,
       orders,
       client,
@@ -231,6 +380,11 @@ export class PositionManager {
       },
       exitSide: execution.side === SignalSide.Long ? "SELL" : "BUY"
     };
+  }
+
+  public async syncExecution(execution: TradeExecutionDocument): Promise<void> {
+    const context = await this.buildContext(execution);
+    const { orders, client, rules } = context;
 
     for (const order of orders.filter(isActiveOrder)) {
       await this.refreshOrder(context, order);

@@ -23,6 +23,11 @@ const envSchema = z.object({
   ),
   TELEGRAM_API_HASH: optionalString,
   TELEGRAM_SESSION: optionalString,
+  TELEGRAM_CONTROL_BOT_TOKEN: optionalString,
+  TELEGRAM_CONTROL_CHAT_ID: z.preprocess(
+    blankAsUndefined,
+    z.string().trim().regex(/^-?\d+$/, "TELEGRAM_CONTROL_CHAT_ID must be a numeric chat ID").optional()
+  ),
   CREDENTIALS_ENCRYPTION_KEY: optionalString,
   BINANCE_ALLOW_LIVE: z
     .enum(["true", "false"])

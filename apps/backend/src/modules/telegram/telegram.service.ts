@@ -54,7 +54,8 @@ const extractSender = (message: TelegramMessage): TelegramSenderInfo | undefined
 export const extractTelegramMessageCandidate = (
   update: TelegramUpdate
 ): TelegramMessageCandidate | null => {
-  const message = update.message ?? update.channel_post;
+  const edited = update.edited_message ?? update.edited_channel_post;
+  const message = update.message ?? update.channel_post ?? edited;
 
   if (!message) {
     return null;
@@ -71,7 +72,11 @@ export const extractTelegramMessageCandidate = (
     messageId: String(message.message_id),
     text,
     sender: extractSender(message),
-    messageDate: new Date(message.date * 1000)
+    messageDate: new Date(message.date * 1000),
+    replyToMessageId: message.reply_to_message
+      ? String(message.reply_to_message.message_id)
+      : undefined,
+    editedAt: edited ? new Date((edited.edit_date ?? edited.date) * 1000) : undefined
   };
 };
 
@@ -96,6 +101,7 @@ export class MongooseSignalRepository implements SignalRepository {
       telegramMessageId: input.telegramMessageId,
       rawText: input.rawText,
       telegramSender: input.telegramSender,
+      replyToMessageId: input.replyToMessageId,
       status: SignalStatus.Received,
       parseStatus: ParseStatus.Pending,
       validationStatus: ValidationStatus.Pending,
@@ -105,6 +111,20 @@ export class MongooseSignalRepository implements SignalRepository {
     return {
       id: signal._id.toString()
     };
+  }
+
+  public async findByMessage(
+    telegramSourceId: mongoose.Types.ObjectId,
+    telegramMessageId: string
+  ): Promise<{ id: string; rawText: string } | null> {
+    const signal = await SignalModel.findOne({ telegramSourceId, telegramMessageId })
+      .select("_id rawText")
+      .lean();
+    return signal ? { id: signal._id.toString(), rawText: signal.rawText } : null;
+  }
+
+  public async updateEditedText(id: string, rawText: string, editedAt: Date): Promise<void> {
+    await SignalModel.updateOne({ _id: id }, { $set: { rawText, editedAt } });
   }
 }
 
@@ -172,6 +192,25 @@ export class TelegramService {
       "Telegram source configured"
     );
 
+    if (candidate.editedAt) {
+      const existing = await this.signalRepository.findByMessage(source._id, candidate.messageId);
+
+      if (existing) {
+        if (existing.rawText === candidate.text) {
+          return { status: "ignored", reason: "edit_without_text_change" };
+        }
+
+        await this.signalRepository.updateEditedText(existing.id, candidate.text, candidate.editedAt);
+        this.logger.info(
+          { signalId: existing.id, telegramMessageId: candidate.messageId },
+          "Telegram message edited"
+        );
+
+        return { status: "edited", signalId: existing.id, previousText: existing.rawText };
+      }
+      // An edit of a message we never stored (sent while offline) is handled as a new message.
+    }
+
     try {
       const signal = await this.signalRepository.createRawSignal({
         userId: source.userId,
@@ -179,7 +218,9 @@ export class TelegramService {
         telegramMessageId: candidate.messageId,
         rawText: candidate.text,
         telegramSender: candidate.sender,
-        receivedAt: candidate.messageDate
+        // Age checks use the edit time for edits, so a late correction can still trade.
+        receivedAt: candidate.editedAt ?? candidate.messageDate,
+        replyToMessageId: candidate.replyToMessageId
       });
 
       this.logger.info(

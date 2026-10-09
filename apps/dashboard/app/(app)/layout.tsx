@@ -210,6 +210,16 @@ const TopBar = ({ summary }: { summary?: Summary }) => {
               Telegram {summary.telegram.running ? "connected" : "offline"}
             </Badge>
           )}
+          {summary && summary.realtime.accounts > 0 && (
+            <Badge
+              tone={summary.realtime.connected === summary.realtime.accounts ? "neutral" : "warn"}
+              className="hidden md:inline-flex"
+            >
+              <span title="Real-time order updates from Binance; positions are also re-checked every few seconds">
+                Binance {summary.realtime.connected === summary.realtime.accounts ? "live" : `${summary.realtime.connected}/${summary.realtime.accounts}`}
+              </span>
+            </Badge>
+          )}
           {openCount > 0 && (
             <Button
               size="sm"

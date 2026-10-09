@@ -54,6 +54,8 @@ export interface TakeProfit {
 export interface Summary {
   trading: { enabled: boolean; configured: boolean; liveTradingAllowed: boolean };
   telegram: { enabled: boolean; running: boolean; mode: "user" | "bot" };
+  realtime: { accounts: number; connected: number; lastEventAt?: string };
+  controlBot: { configured: boolean; running: boolean };
   accounts: { _id: string; name: string; environment: Environment; isActive: boolean }[];
   today: {
     totalSignals: number;
@@ -113,6 +115,9 @@ export interface Signal {
   parseStatus: "PENDING" | "PARSED" | "FAILED";
   parseError?: { code: string; message: string };
   rejectionReason?: string;
+  replyToMessageId?: string;
+  editedAt?: string;
+  followUp?: { action: "CLOSE" | "CANCEL" | "BREAKEVEN" | "MOVE_SL"; executionIds: string[]; notes: string[] };
   receivedAt: string;
 }
 
@@ -180,6 +185,9 @@ export interface Settings {
   maxOpenTrades: number;
   maxDailyLoss: number;
   moveStopToBreakeven: boolean;
+  requireApproval: boolean;
+  approvalTimeoutSeconds: number;
+  followUpActions: boolean;
   allowedSymbols: string[];
   blockedSymbols: string[];
 }

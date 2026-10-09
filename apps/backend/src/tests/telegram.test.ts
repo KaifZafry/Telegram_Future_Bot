@@ -70,6 +70,25 @@ class MemorySignalRepository implements SignalRepository {
       id: `signal-${this.signals.length}`
     });
   }
+
+  public findByMessage(
+    telegramSourceId: Types.ObjectId,
+    telegramMessageId: string
+  ): Promise<{ id: string; rawText: string } | null> {
+    const index = this.signals.findIndex(
+      (signal) =>
+        signal.telegramSourceId.equals(telegramSourceId) &&
+        signal.telegramMessageId === telegramMessageId
+    );
+    const signal = this.signals[index];
+    return Promise.resolve(signal ? { id: `signal-${index + 1}`, rawText: signal.rawText } : null);
+  }
+
+  public updateEditedText(id: string, rawText: string): Promise<void> {
+    const signal = this.signals[Number(id.replace("signal-", "")) - 1];
+    if (signal) signal.rawText = rawText;
+    return Promise.resolve();
+  }
 }
 
 class MemoryTelegramClient implements TelegramClient {
@@ -201,6 +220,42 @@ void describe("Phase 3 Telegram ingestion", () => {
     assert.equal(firstResult.status, "stored");
     assert.equal(secondResult.status, "duplicate");
     assert.equal(signals.signals.length, 1);
+  });
+
+  void it("records which message a reply answers", async () => {
+    const sources = new MemoryTelegramSourceRepository();
+    const signals = new MemorySignalRepository();
+    sources.add(createSource());
+
+    await createService(sources, signals).ingestUpdate(
+      createTextUpdate({ text: "Move SL to entry", reply_to_message: { message_id: 7 } })
+    );
+
+    assert.equal(signals.signals[0]?.replyToMessageId, "7");
+  });
+
+  void it("updates the stored text when a message is edited", async () => {
+    const sources = new MemoryTelegramSourceRepository();
+    const signals = new MemorySignalRepository();
+    sources.add(createSource());
+    const service = createService(sources, signals);
+    const original = createTextUpdate();
+
+    await service.ingestUpdate(original);
+    const edit = await service.ingestUpdate({
+      update_id: 2,
+      edited_message: { ...original.message!, text: "BTCUSDT LONG entry 64000", edit_date: 1_725_000_100 }
+    });
+    const sameText = await service.ingestUpdate({
+      update_id: 3,
+      edited_message: { ...original.message!, text: "BTCUSDT LONG entry 64000", edit_date: 1_725_000_200 }
+    });
+
+    assert.equal(edit.status, "edited");
+    assert.equal(edit.previousText, "BTCUSDT LONG entry 65000");
+    assert.equal(signals.signals.length, 1);
+    assert.equal(signals.signals[0]?.rawText, "BTCUSDT LONG entry 64000");
+    assert.equal(sameText.status, "ignored");
   });
 
   void it("ignores messages without text or caption", async () => {

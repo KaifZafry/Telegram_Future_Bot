@@ -2,7 +2,9 @@ import { randomBytes } from "node:crypto";
 
 import { env } from "../config/env.js";
 import type { BinanceAccountClientRegistry } from "../modules/binance/binance.accounts.js";
+import type { ControlBot } from "../modules/control-bot/control-bot.js";
 import type { PositionManager } from "../modules/binance/binance.position-manager.js";
+import type { UserStreamManager } from "../modules/binance/binance.user-stream.js";
 import type { TelegramModule } from "../modules/telegram/telegram.module.js";
 
 /**
@@ -13,6 +15,8 @@ export const runtime: {
   authSecret: string;
   positionManager?: PositionManager;
   registry?: BinanceAccountClientRegistry;
+  userStreams?: UserStreamManager;
+  controlBot?: ControlBot;
   telegram?: TelegramModule;
 } = {
   authSecret: env.AUTH_SECRET ?? randomBytes(32).toString("base64")
