@@ -15,6 +15,7 @@
     "telegram:login": "tsx src/scripts/telegram-login.ts",
     "telegram:chats": "tsx src/scripts/telegram-chats.ts",
     "signal:dry-run": "tsx src/scripts/signal-dry-run.ts",
+    "signal:test": "tsx src/scripts/signal-test.ts",
     "diagnose": "tsx src/scripts/diagnose.ts"
   },
   "dependencies": {
