@@ -218,10 +218,14 @@ export class BinanceFuturesClient {
     return this.request<BinanceOrderResponse[]>("GET", "/fapi/v1/openOrders", { symbol });
   }
 
-  public getOpenAlgoOrders(symbol: string): Promise<BinanceAlgoOrderResponse[]> {
-    return this.request<BinanceAlgoOrderResponse[]>("GET", "/fapi/v1/openAlgoOrders", {
-      symbol
-    });
+  public async getOpenAlgoOrders(symbol: string): Promise<BinanceAlgoOrderResponse[]> {
+    // Binance wraps the list: { total: number, orders: [...] }
+    const response = await this.request<{ total: number; orders: BinanceAlgoOrderResponse[] }>(
+      "GET",
+      "/fapi/v1/openAlgoOrders",
+      { symbol }
+    );
+    return response.orders ?? [];
   }
 
   public async getPosition(symbol: string): Promise<BinancePosition | undefined> {

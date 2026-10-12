@@ -18,6 +18,7 @@
     "telegram:login": "npm --workspace apps/backend run telegram:login --",
     "telegram:chats": "npm --workspace apps/backend run telegram:chats --",
     "signal:dry-run": "npm --workspace apps/backend run signal:dry-run --",
+    "diagnose": "npm --workspace apps/backend run diagnose",
     "dev:api": "npm --workspace apps/backend run dev",
     "dev:dashboard": "npm --workspace apps/dashboard run dev"
   },

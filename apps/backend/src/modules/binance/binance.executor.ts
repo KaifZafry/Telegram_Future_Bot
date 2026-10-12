@@ -11,6 +11,7 @@ import {
 import type { BinanceFuturesClient } from "./binance.client.js";
 import type { ExecutionPlan } from "./binance.planner.js";
 import { recordOrder, type OrderOwner } from "./binance.orders.js";
+import type { BinanceAlgoOrderResponse, BinanceOrderResponse } from "./binance.types.js";
 
 export interface ExecuteOnAccountInput {
   signal: {
@@ -55,11 +56,19 @@ export const executeOnAccount = async (
     };
   }
 
-  const [position, openOrders, openAlgoOrders] = await Promise.all([
-    client.getPosition(plan.symbol),
-    client.getOpenOrders(plan.symbol),
-    client.getOpenAlgoOrders(plan.symbol)
-  ]);
+  let position, openOrders: BinanceOrderResponse[], openAlgoOrders: BinanceAlgoOrderResponse[];
+  try {
+    [position, openOrders, openAlgoOrders] = await Promise.all([
+      client.getPosition(plan.symbol),
+      client.getOpenOrders(plan.symbol),
+      client.getOpenAlgoOrders(plan.symbol)
+    ]);
+  } catch (error) {
+    return {
+      status: "failed",
+      reason: `Failed to read account state before placing orders: ${errorMessage(error)}`
+    };
+  }
 
   if (position && Number(position.positionAmt) !== 0) {
     return { status: "skipped", reason: `Account already has an open ${plan.symbol} position` };

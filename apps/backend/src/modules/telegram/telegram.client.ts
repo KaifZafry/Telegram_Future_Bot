@@ -77,6 +77,12 @@ export class GramJsUserTelegramClient implements TelegramClient {
       );
     }
 
+    // GramJS needs at least one getDialogs() call to populate its internal
+    // entity cache (peer → chatId mappings). Without this, messages from
+    // channels and supergroups arrive but message.chatId resolves to undefined
+    // because the peer is unknown, so they are silently dropped.
+    await this.client.getDialogs({ limit: 1 });
+
     this.client.addEventHandler((event: NewMessageEvent) => {
       const message = event.message;
       const chatId = message.chatId;
